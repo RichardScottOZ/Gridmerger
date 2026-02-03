@@ -301,6 +301,13 @@ merged = GridMerger.merge_multiple_grids(
 - Quality classification and its impact
 - Combined scenarios and best practices
 
+**See [CHAIN_LEVELING.md](CHAIN_LEVELING.md) for comprehensive guide on:**
+- What chain leveling means (leveling through geographic neighbors)
+- Real-world aeromagnetic survey examples (TMI, RTP)
+- Geographic vs data type connections (GEOGRAPHY matters, not data type!)
+- Comparison to Minty GridMerge methodology
+- Step-by-step implementation guide
+
 ## File Format Support
 
 GridMerge supports multiple grid formats with automatic format detection:

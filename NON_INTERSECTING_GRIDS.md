@@ -150,19 +150,23 @@ Grid 4 baseline: 150 nT → stays at 150 nT ⚠ (no overlap to correct)
 
 #### Solution 1: Chain Leveling (Recommended)
 
-If you have grids that form a chain (Grid 1↔2↔3↔4):
+**What is Chain Leveling?** Leveling grids through a sequence of geographic overlaps when they don't all directly overlap with a single reference.
+
+**Key Point:** "Connected" means GEOGRAPHIC proximity (physical overlap in space), NOT data type similarity (TMI, RTP, etc.).
+
+If you have grids that form a geographic chain (Grid 1↔2↔3↔4):
 
 ```python
 from gridmerge import GridAdjuster
 
-# Method: Level in sequence
-# Grid 2 to Grid 1
+# Method: Level in sequence through GEOGRAPHIC neighbors
+# Grid 2 to Grid 1 (they overlap geographically)
 grid2_leveled = GridAdjuster.level_to_reference(grid2, grid1)
 
-# Grid 3 to Grid 2 (now leveled)
+# Grid 3 to Grid 2 (they overlap geographically, even if Grid 3 doesn't touch Grid 1)
 grid3_leveled = GridAdjuster.level_to_reference(grid3, grid2_leveled)
 
-# Grid 4 to Grid 3 (now leveled)
+# Grid 4 to Grid 3 (they overlap geographically, even if Grid 4 doesn't touch Grid 1 or 2)
 grid4_leveled = GridAdjuster.level_to_reference(grid4, grid3_leveled)
 
 # Now merge all leveled grids
@@ -173,13 +177,28 @@ merged = GridMerger.merge_multiple_grids(leveled_grids, level_to_first=False)
 **How this works:**
 ```
 Grid 1 (baseline 100) ← reference
-   ↓ overlap
+   ↓ geographic overlap
 Grid 2 (baseline 112) → leveled to 100
-   ↓ overlap
+   ↓ geographic overlap
 Grid 3 (baseline 95) → leveled to 100 (via Grid 2)
-   ↓ overlap
+   ↓ geographic overlap
 Grid 4 (baseline 150) → leveled to 100 (via Grid 3)
 ```
+
+**Real-World Example:**
+```
+Central Survey (TMI, 52,000 nT) ← reference
+   ↓ 5km geographic overlap
+East Survey (TMI, 52,150 nT) → leveled to 52,000 nT
+   ↓ 5km geographic overlap  
+FarEast Survey (RTP, 320 nT) → leveled to 52,000 nT (via East, even though data type changed!)
+   ↓ 5km geographic overlap
+FarFarEast Survey (RTP, 310 nT) → leveled to 52,000 nT (via FarEast)
+```
+
+Note: TMI→RTP transition works because they overlap GEOGRAPHICALLY, not because they're the same data type!
+
+**For complete details, see [CHAIN_LEVELING.md](CHAIN_LEVELING.md)**
 
 #### Solution 2: Regional References
 
