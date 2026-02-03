@@ -15,5 +15,19 @@ __version__ = "0.1.0"
 from .grid import Grid
 from .merge import GridMerger
 from .adjust import GridAdjuster
+from .utils import (
+    inspect_grids,
+    reproject_grids_to_reference,
+    interactive_reproject,
+    prepare_grids_for_merge
+)
 
-__all__ = ["Grid", "GridMerger", "GridAdjuster"]
+__all__ = [
+    "Grid",
+    "GridMerger",
+    "GridAdjuster",
+    "inspect_grids",
+    "reproject_grids_to_reference",
+    "interactive_reproject",
+    "prepare_grids_for_merge"
+]

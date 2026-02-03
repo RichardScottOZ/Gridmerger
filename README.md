@@ -449,6 +449,146 @@ grid_back = Grid.from_xarray(da)
 - Resolution strategy selection (finest, coarsest, median)
 - Real-world examples and workflows
 
+### Batch Reprojection Utilities
+
+For working with many grids that have different CRS and resolutions, GridMerge provides convenient batch processing utilities:
+
+#### Inspect Multiple Grids
+
+See all grid properties at a glance:
+
+```python
+from gridmerge.utils import inspect_grids
+
+# Inspect multiple grid files
+grid_files = ['survey1.tif', 'survey2.tif', 'survey3.tif']
+info = inspect_grids(grid_files)
+
+# Displays table with:
+# - Index, filename
+# - Resolution (cellsize)
+# - CRS
+# - Bounds and dimensions
+# - File size
+```
+
+Output example:
+```
+================================================================================
+GRID INSPECTION REPORT
+================================================================================
+
+[0] Loading: survey1.tif
+    Resolution:  100.000000 units
+    CRS:         EPSG:32755
+    Bounds:      (500000.0, 6500000.0, 510000.0, 6510000.0)
+    Dimensions:  100 rows × 100 cols
+    Size:        3.81 MB
+
+[1] Loading: survey2.tif
+    Resolution:  50.000000 units
+    CRS:         EPSG:32755
+    ...
+
+[2] Loading: survey3.tif
+    Resolution:  200.000000 units
+    CRS:         EPSG:32754  <-- Different CRS!
+    ...
+```
+
+#### Batch Reproject to Reference
+
+Reproject all grids to match a reference grid in one call:
+
+```python
+from gridmerge.utils import reproject_grids_to_reference
+
+# Option 1: Use one of the input grids as reference
+aligned_files = reproject_grids_to_reference(
+    grid_files=['survey1.tif', 'survey2.tif', 'survey3.tif'],
+    reference_index=0,  # Use first grid as reference
+    output_dir='./aligned/',
+    method='bilinear'
+)
+
+# Option 2: Provide explicit reference grid
+from gridmerge import Grid
+reference = Grid.read('my_reference_grid.tif')
+
+aligned_files = reproject_grids_to_reference(
+    grid_files=['survey1.tif', 'survey2.tif'],
+    reference_grid=reference,
+    output_dir='./aligned/',
+    method='bilinear'
+)
+
+# All grids now have same CRS and resolution!
+```
+
+Features:
+- Automatically skips grids that already match (efficient!)
+- Shows progress for each grid
+- Returns list of output file paths
+- Creates output directory if needed
+
+#### Complete Workflow: Inspect → Reproject → Merge
+
+The recommended workflow for heterogeneous datasets:
+
+```python
+from gridmerge import Grid, GridMerger
+from gridmerge.utils import inspect_grids, reproject_grids_to_reference
+
+# Step 1: Inspect to see what you're working with
+grid_files = ['survey_a.tif', 'survey_b.tif', 'survey_c.tif']
+info = inspect_grids(grid_files)
+# Review the table to choose best reference (usually highest quality)
+
+# Step 2: Reproject all to match reference
+aligned_files = reproject_grids_to_reference(
+    grid_files=grid_files,
+    reference_index=0,  # Choose based on inspection
+    output_dir='./aligned/',
+    method='bilinear'
+)
+
+# Step 3: Load aligned grids and merge
+grids = [Grid.read(f) for f in aligned_files]
+merged = GridMerger.merge_with_auto_leveling(
+    grids,
+    use_dc_shift=True,
+    polynomial_degree=1,
+    feather_distance=10
+)
+
+# Step 4: Save final result
+merged.write('final_merged.tif')
+```
+
+#### One-Line Convenience Function
+
+For the common case of preparing grids for merging:
+
+```python
+from gridmerge.utils import prepare_grids_for_merge
+
+# Prepare all grids to match the first one
+prepared_files = prepare_grids_for_merge(
+    grid_files=['a.tif', 'b.tif', 'c.tif'],
+    reference_index=0,
+    output_dir='./prepared/',
+    method='bilinear'
+)
+
+# Ready to merge immediately
+from gridmerge import Grid, GridMerger
+grids = [Grid.read(f) for f in prepared_files]
+merged = GridMerger.merge_with_auto_leveling(grids)
+merged.write('merged.tif')
+```
+
+**See [examples/batch_reproject_demo.py](examples/batch_reproject_demo.py) for complete working examples.**
+
 ## File Format Support
 
 GridMerge supports multiple grid formats with automatic format detection:
