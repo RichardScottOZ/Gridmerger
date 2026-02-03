@@ -266,6 +266,41 @@ merged.write("merged_47_grids.tif")
 - Progress tracking
 - Optimization tips
 
+### Non-Intersecting Grids & Quality Classification
+
+**Important:** Some grids may not overlap with each other. Learn how GridMerge handles this:
+
+```python
+# Some grids overlap, some don't
+grids = [
+    Grid.read("region_a_grid1.tif"),  # Reference
+    Grid.read("region_a_grid2.tif"),  # Overlaps with grid1
+    Grid.read("region_b_grid1.tif"),  # NO overlap with region_a!
+]
+
+# Grids without overlap won't be leveled to reference
+merged = GridMerger.merge_with_auto_leveling(grids)
+```
+
+**Quality classification** (priorities) lets you control merge order:
+
+```python
+# Assign priorities based on quality (higher = better)
+priorities = [100, 100, 70]  # Region A high quality, Region B lower
+
+merged = GridMerger.merge_multiple_grids(
+    grids,
+    priorities=priorities,
+    level_to_first=True
+)
+```
+
+**See [NON_INTERSECTING_GRIDS.md](NON_INTERSECTING_GRIDS.md) for detailed guide on:**
+- How DC shift/leveling works without overlap
+- Solutions for non-intersecting grids (chain leveling)
+- Quality classification and its impact
+- Combined scenarios and best practices
+
 ## File Format Support
 
 GridMerge supports multiple grid formats with automatic format detection:
