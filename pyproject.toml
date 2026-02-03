@@ -37,6 +37,16 @@ dev = [
 geotiff = [
     "rasterio>=1.2.0",
 ]
+rioxarray = [
+    "xarray>=0.20.0",
+    "rioxarray>=0.13.0",
+    "rasterio>=1.2.0",
+]
+all = [
+    "rasterio>=1.2.0",
+    "xarray>=0.20.0",
+    "rioxarray>=0.13.0",
+]
 
 [project.scripts]
 gridmerge = "gridmerge.cli:main"

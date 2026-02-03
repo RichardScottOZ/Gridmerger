@@ -20,6 +20,11 @@ GridMerge provides comprehensive tools for:
   - Priority-based merging
   - Feathering/blending in overlap regions
   - **Scales to 47+ grids** (or hundreds more) - See [LARGE_SCALE_MERGING.md](LARGE_SCALE_MERGING.md)
+- **Resampling & Reprojection** (with rioxarray):
+  - Resample grids to different resolutions
+  - Reproject grids to different coordinate systems
+  - Match grids to reference grid (resolution + CRS)
+  - Merge heterogeneous datasets (different resolutions and projections)
 
 ## Installation
 
@@ -35,10 +40,16 @@ For GeoTIFF support, install with rasterio:
 pip install -e ".[geotiff]"
 ```
 
-Or with all development dependencies:
+For resampling and reprojection support (rioxarray):
 
 ```bash
-pip install -e ".[dev,geotiff]"
+pip install -e ".[rioxarray]"
+```
+
+Or install everything (GeoTIFF + rioxarray + dev tools):
+
+```bash
+pip install -e ".[all,dev]"
 ```
 
 ## Quick Start
@@ -310,7 +321,11 @@ merged = GridMerger.merge_multiple_grids(
 
 ### Different Grid Resolutions
 
-**Important:** GridMerge assumes all grids have the same resolution (cellsize). Learn how to handle different resolutions:
+**Important:** GridMerge assumes all grids have the same resolution (cellsize).
+
+#### Manual Resampling (External Tools)
+
+You can resample grids before merging using external tools like GDAL or rasterio:
 
 ```python
 from gridmerge import Grid
@@ -324,12 +339,113 @@ if len(set(cellsizes)) > 1:
     print("Resample to common resolution before merging!")
 ```
 
-**Best practice:** Resample all grids to a common resolution before merging using GDAL, rasterio, or scipy.
+**See [DIFFERENT_RESOLUTIONS.md](DIFFERENT_RESOLUTIONS.md) for complete guide on manual resampling using GDAL, rasterio, or scipy.**
 
-**See [DIFFERENT_RESOLUTIONS.md](DIFFERENT_RESOLUTIONS.md) for complete guide on:**
-- How current implementation handles different resolutions
-- Why same resolution matters (alignment, data integrity, leveling accuracy)
-- Manual resampling solutions (GDAL, rasterio, scipy)
+#### Automatic Resampling and Reprojection (rioxarray)
+
+GridMerge now supports automatic resampling and reprojection using rioxarray:
+
+```bash
+# Install rioxarray support
+pip install -e ".[rioxarray]"
+```
+
+**Resample to different resolution:**
+```python
+from gridmerge import Grid
+
+# Load grid
+grid = Grid.read("input.tif")
+
+# Resample to coarser resolution (100m → 200m)
+grid_200m = grid.resample(target_cellsize=200, method='average')
+
+# Resample to finer resolution (100m → 50m)
+grid_50m = grid.resample(target_cellsize=50, method='bilinear')
+
+# Save
+grid_200m.write("output_200m.tif")
+```
+
+**Reproject to different CRS:**
+```python
+# Reproject from UTM to Geographic
+grid_geo = grid.reproject(target_crs='EPSG:4326', method='bilinear')
+
+# Reproject to different UTM zone
+grid_utm54 = grid.reproject(target_crs='EPSG:32754', method='bilinear')
+```
+
+**Match to reference grid (resolution + CRS + extent):**
+```python
+# Load grids with different resolutions and CRS
+reference = Grid.read("reference_100m_utm55.tif")  # 100m, UTM 55S
+survey_a = Grid.read("survey_50m_utm55.tif")       # 50m, UTM 55S
+survey_b = Grid.read("survey_200m_utm54.tif")      # 200m, UTM 54S (different zone!)
+
+# Match both surveys to reference grid
+survey_a_matched = survey_a.match_grid(reference, method='average')
+survey_b_matched = survey_b.match_grid(reference, method='bilinear')
+
+# Now all grids have same resolution, CRS, and extent - ready to merge!
+merged = GridMerger.merge_with_auto_leveling(
+    [reference, survey_a_matched, survey_b_matched]
+)
+```
+
+**Complete workflow for heterogeneous datasets:**
+```python
+from gridmerge import Grid, GridMerger
+
+# Load surveys with different resolutions and CRS
+grids = [
+    Grid.read("survey_100m_utm55.tif"),  # Reference
+    Grid.read("survey_50m_utm55.tif"),   # Different resolution
+    Grid.read("survey_200m_utm54.tif"),  # Different resolution AND CRS
+]
+
+# Choose reference (typically highest quality or most coverage)
+reference = grids[0]
+
+# Match all other grids to reference
+grids_matched = [reference.copy()]
+for grid in grids[1:]:
+    grids_matched.append(grid.match_grid(reference, method='bilinear'))
+
+# Merge with leveling
+merged = GridMerger.merge_with_auto_leveling(
+    grids_matched,
+    use_dc_shift=True,
+    polynomial_degree=1,
+    feather_distance=10
+)
+
+merged.write("merged_unified.tif")
+```
+
+**Available resampling methods:**
+- `'nearest'`: Nearest neighbor (fast, preserves values)
+- `'bilinear'`: Bilinear interpolation (smooth, general purpose)
+- `'cubic'`: Cubic interpolation (smoother, higher quality)
+- `'average'`: Average of cells (best for downsampling)
+- And many more (lanczos, gauss, mode, min, max, etc.)
+
+**xarray Integration:**
+```python
+# Convert to xarray for advanced workflows
+da = grid.to_xarray(crs='EPSG:32755')
+
+# Use xarray operations
+mean_value = da.mean()
+std_dev = da.std()
+
+# Convert back
+grid_back = Grid.from_xarray(da)
+```
+
+**See also:**
+- [examples/rioxarray_demo.py](examples/rioxarray_demo.py) - Complete working examples
+- [DIFFERENT_RESOLUTIONS.md](DIFFERENT_RESOLUTIONS.md) - Manual resampling guide
 - Resolution strategy selection (finest, coarsest, median)
 - Real-world examples and workflows
 

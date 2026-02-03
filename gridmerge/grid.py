@@ -508,6 +508,291 @@ class Grid:
                     "Install with: pip install rasterio"
                 )
     
+    def to_xarray(self, crs: Optional[str] = None):
+        """
+        Convert Grid to xarray DataArray with rioxarray spatial extensions.
+        
+        Requires: xarray, rioxarray
+        
+        Args:
+            crs: Coordinate reference system (e.g., 'EPSG:4326', 'EPSG:32755')
+                 If None, uses metadata['crs'] if available
+        
+        Returns:
+            xarray.DataArray with spatial metadata
+        """
+        try:
+            import xarray as xr
+            import rioxarray  # noqa: F401
+        except ImportError:
+            raise ImportError(
+                "xarray and rioxarray are required for this functionality. "
+                "Install with: pip install xarray rioxarray"
+            )
+        
+        # Use provided CRS or metadata CRS
+        if crs is None:
+            crs = self.metadata.get('crs', None)
+        
+        # Create coordinate arrays
+        x_coords = np.arange(self.xmin + self.cellsize/2, 
+                            self.xmax, 
+                            self.cellsize)[:self.ncols]
+        y_coords = np.arange(self.ymax - self.cellsize/2, 
+                            self.ymin, 
+                            -self.cellsize)[:self.nrows]
+        
+        # Create DataArray
+        da = xr.DataArray(
+            self.data,
+            coords={
+                'y': y_coords,
+                'x': x_coords
+            },
+            dims=['y', 'x'],
+            attrs={
+                'nodata': self.nodata_value,
+                **self.metadata
+            }
+        )
+        
+        # Add spatial reference if CRS is provided
+        if crs:
+            da = da.rio.write_crs(crs)
+            da = da.rio.write_nodata(self.nodata_value)
+        
+        return da
+    
+    @staticmethod
+    def from_xarray(da, nodata_value: Optional[float] = None, 
+                   metadata: Optional[Dict[str, Any]] = None):
+        """
+        Create Grid from xarray DataArray.
+        
+        Args:
+            da: xarray.DataArray with x, y coordinates
+            nodata_value: Override nodata value (uses da.rio.nodata if None)
+            metadata: Additional metadata (merged with CRS from da)
+        
+        Returns:
+            Grid object
+        """
+        try:
+            import rioxarray  # noqa: F401
+        except ImportError:
+            raise ImportError(
+                "rioxarray is required for this functionality. "
+                "Install with: pip install rioxarray"
+            )
+        
+        # Extract data
+        data = da.values
+        
+        # Extract coordinates
+        y = da.y.values
+        x = da.x.values
+        
+        # Calculate cellsize and bounds
+        cellsize_x = abs(float(x[1] - x[0])) if len(x) > 1 else 1.0
+        cellsize_y = abs(float(y[1] - y[0])) if len(y) > 1 else 1.0
+        cellsize = (cellsize_x + cellsize_y) / 2  # Average if slightly different
+        
+        xmin = float(x.min() - cellsize/2)
+        ymin = float(y.min() - cellsize/2)
+        
+        # Get nodata value
+        if nodata_value is None:
+            try:
+                nodata_value = float(da.rio.nodata)
+            except (AttributeError, TypeError):
+                nodata_value = da.attrs.get('nodata', -99999.0)
+        
+        # Extract CRS and metadata
+        grid_metadata = metadata.copy() if metadata else {}
+        try:
+            crs = da.rio.crs
+            if crs:
+                grid_metadata['crs'] = str(crs)
+        except AttributeError:
+            pass
+        
+        # Merge any existing attributes
+        for key, value in da.attrs.items():
+            if key not in grid_metadata and key != 'nodata':
+                grid_metadata[key] = value
+        
+        return Grid(
+            data=data,
+            xmin=xmin,
+            ymin=ymin,
+            cellsize=cellsize,
+            nodata_value=nodata_value,
+            metadata=grid_metadata
+        )
+    
+    def resample(self, target_cellsize: float, method: str = 'bilinear') -> 'Grid':
+        """
+        Resample grid to a different resolution using rioxarray.
+        
+        Requires: xarray, rioxarray
+        
+        Args:
+            target_cellsize: Target cell size (resolution)
+            method: Resampling method ('bilinear', 'cubic', 'nearest', 'average')
+        
+        Returns:
+            New Grid object at target resolution
+        """
+        try:
+            import rioxarray  # noqa: F401
+        except ImportError:
+            raise ImportError(
+                "xarray and rioxarray are required for resampling. "
+                "Install with: pip install xarray rioxarray"
+            )
+        
+        # Convert to xarray
+        da = self.to_xarray()
+        
+        # Calculate new dimensions
+        new_width = int(np.round((self.xmax - self.xmin) / target_cellsize))
+        new_height = int(np.round((self.ymax - self.ymin) / target_cellsize))
+        
+        # Resample using rioxarray
+        da_resampled = da.rio.reproject(
+            da.rio.crs if da.rio.crs else 'EPSG:4326',
+            shape=(new_height, new_width),
+            resampling=self._get_rasterio_resampling(method),
+            nodata=self.nodata_value
+        )
+        
+        # Convert back to Grid
+        return Grid.from_xarray(da_resampled, nodata_value=self.nodata_value)
+    
+    def reproject(self, target_crs: str, method: str = 'bilinear') -> 'Grid':
+        """
+        Reproject grid to a different coordinate reference system using rioxarray.
+        
+        Requires: xarray, rioxarray
+        
+        Args:
+            target_crs: Target CRS (e.g., 'EPSG:4326', 'EPSG:32755')
+            method: Resampling method ('bilinear', 'cubic', 'nearest', 'average')
+        
+        Returns:
+            New Grid object in target CRS
+        """
+        try:
+            import rioxarray  # noqa: F401
+        except ImportError:
+            raise ImportError(
+                "xarray and rioxarray are required for reprojection. "
+                "Install with: pip install xarray rioxarray"
+            )
+        
+        # Convert to xarray
+        da = self.to_xarray()
+        
+        if not da.rio.crs:
+            raise ValueError(
+                "Grid must have a CRS defined for reprojection. "
+                "Set metadata['crs'] or use to_xarray(crs='EPSG:XXXX')"
+            )
+        
+        # Reproject using rioxarray
+        da_reprojected = da.rio.reproject(
+            target_crs,
+            resampling=self._get_rasterio_resampling(method),
+            nodata=self.nodata_value
+        )
+        
+        # Convert back to Grid
+        return Grid.from_xarray(da_reprojected, nodata_value=self.nodata_value)
+    
+    def match_grid(self, reference: 'Grid', method: str = 'bilinear') -> 'Grid':
+        """
+        Resample and reproject this grid to match a reference grid's resolution and CRS.
+        
+        Requires: xarray, rioxarray
+        
+        Args:
+            reference: Reference Grid to match
+            method: Resampling method ('bilinear', 'cubic', 'nearest', 'average')
+        
+        Returns:
+            New Grid object matching reference grid's spatial properties
+        """
+        try:
+            import rioxarray  # noqa: F401
+        except ImportError:
+            raise ImportError(
+                "xarray and rioxarray are required for grid matching. "
+                "Install with: pip install xarray rioxarray"
+            )
+        
+        # Convert both grids to xarray
+        da_source = self.to_xarray()
+        da_reference = reference.to_xarray()
+        
+        # Check if source has CRS
+        if not da_source.rio.crs:
+            # Assume same CRS as reference if not specified
+            if da_reference.rio.crs:
+                da_source = da_source.rio.write_crs(da_reference.rio.crs)
+        
+        # Reproject to match reference
+        da_matched = da_source.rio.reproject_match(
+            da_reference,
+            resampling=self._get_rasterio_resampling(method),
+            nodata=self.nodata_value
+        )
+        
+        # Convert back to Grid
+        return Grid.from_xarray(da_matched, nodata_value=self.nodata_value)
+    
+    @staticmethod
+    def _get_rasterio_resampling(method: str):
+        """
+        Convert method string to rasterio Resampling enum.
+        
+        Args:
+            method: Method name string
+        
+        Returns:
+            rasterio.enums.Resampling value
+        """
+        try:
+            from rasterio.enums import Resampling
+        except ImportError:
+            raise ImportError(
+                "rasterio is required for resampling. "
+                "Install with: pip install rasterio"
+            )
+        
+        method_map = {
+            'nearest': Resampling.nearest,
+            'bilinear': Resampling.bilinear,
+            'cubic': Resampling.cubic,
+            'cubic_spline': Resampling.cubic_spline,
+            'lanczos': Resampling.lanczos,
+            'average': Resampling.average,
+            'mode': Resampling.mode,
+            'gauss': Resampling.gauss,
+            'max': Resampling.max,
+            'min': Resampling.min,
+            'med': Resampling.med,
+            'q1': Resampling.q1,
+            'q3': Resampling.q3,
+        }
+        
+        if method not in method_map:
+            raise ValueError(
+                f"Unknown resampling method: {method}. "
+                f"Available methods: {list(method_map.keys())}"
+            )
+        
+        return method_map[method]
+    
     @staticmethod
     def detect_format(filepath: str) -> str:
         """
