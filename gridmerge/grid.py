@@ -593,8 +593,14 @@ class Grid:
         x = da.x.values
         
         # Calculate cellsize and bounds
-        cellsize_x = abs(float(x[1] - x[0])) if len(x) > 1 else 1.0
-        cellsize_y = abs(float(y[1] - y[0])) if len(y) > 1 else 1.0
+        if len(x) < 2 or len(y) < 2:
+            raise ValueError(
+                "DataArray must have at least 2 pixels in each dimension. "
+                "Single-pixel grids are not supported for geophysical data."
+            )
+        
+        cellsize_x = abs(float(x[1] - x[0]))
+        cellsize_y = abs(float(y[1] - y[0]))
         cellsize = (cellsize_x + cellsize_y) / 2  # Average if slightly different
         
         xmin = float(x.min() - cellsize/2)
@@ -653,6 +659,14 @@ class Grid:
         
         # Convert to xarray
         da = self.to_xarray()
+        
+        # Check if CRS is available for resampling
+        if not da.rio.crs:
+            warnings.warn(
+                "Grid does not have a CRS defined. Assuming EPSG:4326 for resampling. "
+                "Set metadata['crs'] for accurate results.",
+                UserWarning
+            )
         
         # Calculate new dimensions
         new_width = int(np.round((self.xmax - self.xmin) / target_cellsize))

@@ -271,7 +271,8 @@ def demo_4_merge_different_crs_resolution():
     print("   - Resample Survey B from 50m to 100m")
     print("   - Reproject AND resample Survey C to UTM 55S @ 100m")
     
-    grids_matched = [survey_a.copy()]
+    # Start with reference grid (no modification needed)
+    grids_matched = [survey_a.copy()]  # Copy to avoid modifying original
     
     print("\n   Matching Survey B...")
     survey_b_matched = survey_b.match_grid(survey_a, method='average')
