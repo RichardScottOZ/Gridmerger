@@ -308,6 +308,31 @@ merged = GridMerger.merge_multiple_grids(
 - Comparison to Minty GridMerge methodology
 - Step-by-step implementation guide
 
+### Different Grid Resolutions
+
+**Important:** GridMerge assumes all grids have the same resolution (cellsize). Learn how to handle different resolutions:
+
+```python
+from gridmerge import Grid
+
+# Check resolutions
+grids = [Grid.read(f) for f in grid_files]
+cellsizes = [g.cellsize for g in grids]
+
+if len(set(cellsizes)) > 1:
+    print(f"WARNING: Different resolutions: {cellsizes}")
+    print("Resample to common resolution before merging!")
+```
+
+**Best practice:** Resample all grids to a common resolution before merging using GDAL, rasterio, or scipy.
+
+**See [DIFFERENT_RESOLUTIONS.md](DIFFERENT_RESOLUTIONS.md) for complete guide on:**
+- How current implementation handles different resolutions
+- Why same resolution matters (alignment, data integrity, leveling accuracy)
+- Manual resampling solutions (GDAL, rasterio, scipy)
+- Resolution strategy selection (finest, coarsest, median)
+- Real-world examples and workflows
+
 ## File Format Support
 
 GridMerge supports multiple grid formats with automatic format detection:
