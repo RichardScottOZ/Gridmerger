@@ -1,4 +1,4 @@
-# GridMerge
+# GridMerger
 
 A basic Python package for leveling and merging gridded geophysical data, like airborne magnetic and gamma-ray spectrometric data. 
 
