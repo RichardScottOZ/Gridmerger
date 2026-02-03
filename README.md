@@ -1,6 +1,6 @@
 # GridMerge
 
-A Python package for leveling and merging gridded geophysical data, particularly airborne magnetic and gamma-ray spectrometric data. This package is a reverse-engineered implementation based on the GridMerge software by Minty Geophysics.
+A basic Python package for leveling and merging gridded geophysical data, like airborne magnetic and gamma-ray spectrometric data. 
 
 ## Features
 
