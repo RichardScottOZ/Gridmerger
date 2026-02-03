@@ -6,7 +6,11 @@ A Python package for leveling and merging gridded geophysical data, particularly
 
 GridMerge provides comprehensive tools for:
 
-- **Grid I/O**: Read and write ER Mapper (.ers) format grids
+- **Grid I/O**: Read and write multiple grid formats:
+  - ER Mapper (.ers)
+  - GeoTIFF (.tif, .tiff) - requires rasterio or GDAL
+  - ASCII Grid (.asc, .grd)
+  - **Mix and match formats!** - You can merge grids from different formats
 - **Grid Leveling**: Adjust grids to match reference levels using:
   - DC shift (baseline correction)
   - Scale adjustment
@@ -25,10 +29,16 @@ Install from the repository:
 pip install -e .
 ```
 
-Or with development dependencies:
+For GeoTIFF support, install with rasterio:
 
 ```bash
-pip install -e ".[dev]"
+pip install -e ".[geotiff]"
+```
+
+Or with all development dependencies:
+
+```bash
+pip install -e ".[dev,geotiff]"
 ```
 
 ## Quick Start
@@ -38,41 +48,100 @@ pip install -e ".[dev]"
 ```python
 from gridmerge import Grid, GridMerger, GridAdjuster
 
-# Load grids
-grid1 = Grid.read_ers("survey1.ers")
-grid2 = Grid.read_ers("survey2.ers")
+# Load grids (format auto-detected from extension)
+grid1 = Grid.read("survey1.tif")  # GeoTIFF
+grid2 = Grid.read("survey2.asc")  # ASCII Grid
+grid3 = Grid.read("survey3.ers")  # ER Mapper
 
-# Automatic merging with leveling
+# Automatic merging with leveling (mixed formats!)
 merged = GridMerger.merge_with_auto_leveling(
-    [grid1, grid2],
+    [grid1, grid2, grid3],
     polynomial_degree=1,
     feather=True
 )
 
-# Save result
-merged.write_ers("merged_output.ers")
+# Save result (format auto-detected from extension)
+merged.write("merged_output.tif")  # Save as GeoTIFF
+# or
+merged.write("merged_output.asc")  # Save as ASCII Grid
+# or
+merged.write("merged_output.ers")  # Save as ER Mapper
 ```
 
 ### Command-Line Interface
 
-Merge multiple grids with automatic leveling:
+Merge multiple grids with automatic leveling (mixed formats):
 ```bash
-gridmerge merge grid1.ers grid2.ers grid3.ers -o merged.ers --auto
+gridmerge merge grid1.tif grid2.asc grid3.ers -o merged.tif --auto
 ```
 
 Merge with specific adjustments:
 ```bash
-gridmerge merge grid1.ers grid2.ers -o merged.ers --dc-shift --polynomial --polynomial-degree 2
+gridmerge merge grid1.ers grid2.ers -o merged.tif --dc-shift --polynomial --polynomial-degree 2
 ```
 
-Level one grid to a reference:
+Level one grid to another (different formats):
 ```bash
-gridmerge level reference.ers input.ers -o leveled.ers --dc-shift --polynomial 1
+gridmerge level reference.tif input.asc -o leveled.ers --dc-shift --polynomial 2
+```
+
+Convert between formats:
+```bash
+gridmerge info input.asc  # Show grid info
+# Then save as different format using Python API or by merging a single grid
 ```
 
 Display grid information:
 ```bash
-gridmerge info grid1.ers grid2.ers
+gridmerge info grid1.tif grid2.asc grid3.ers
+```
+
+## Supported Formats
+
+### Format Auto-Detection
+
+GridMerge automatically detects the format based on file extension:
+
+- **ER Mapper**: `.ers` files
+- **GeoTIFF**: `.tif`, `.tiff` files (requires rasterio or GDAL)
+- **ASCII Grid**: `.asc`, `.grd` files
+
+You can also explicitly specify the format:
+
+```python
+grid = Grid.read("myfile.dat", format="ascii")
+grid.write("output.dat", format="geotiff")
+```
+
+### Format Conversion
+
+Convert between formats easily:
+
+```python
+from gridmerge import Grid
+
+# Read ASCII, write as GeoTIFF
+grid = Grid.read("input.asc")
+grid.write("output.tif")
+
+# Read GeoTIFF, write as ER Mapper
+grid = Grid.read("input.tif")
+grid.write("output.ers")
+```
+
+### No Conversion Needed!
+
+**The key feature**: You don't need to convert all your grids to the same format before merging! GridMerge can read and merge grids from different formats directly:
+
+```python
+# Mix and match formats!
+grids = [
+    Grid.read("magnetic_survey.tif"),
+    Grid.read("radiometric_survey.asc"),
+    Grid.read("legacy_data.ers")
+]
+merged = GridMerger.merge_with_auto_leveling(grids)
+merged.write("combined.tif")  # Save in any format you want
 ```
 
 ## Core Concepts
@@ -121,9 +190,9 @@ grid.write_ers("output.ers")
 ```python
 from gridmerge import Grid, GridAdjuster
 
-# Load grids
-reference = Grid.read_ers("reference.ers")
-grid = Grid.read_ers("input.ers")
+# Load grids (any format)
+reference = Grid.read("reference.tif")
+grid = Grid.read("input.asc")
 
 # Calculate adjustments
 dc_shift = GridAdjuster.calculate_dc_shift(reference, grid)
@@ -143,6 +212,9 @@ leveled = GridAdjuster.level_to_reference(
     use_scale=True,
     polynomial_degree=2
 )
+
+# Save in desired format
+leveled.write("leveled_output.tif")
 ```
 
 ### Advanced Merging
@@ -150,8 +222,8 @@ leveled = GridAdjuster.level_to_reference(
 ```python
 from gridmerge import Grid, GridMerger
 
-# Load multiple grids
-grids = [Grid.read_ers(f"grid{i}.ers") for i in range(1, 6)]
+# Load multiple grids (mixed formats)
+grids = [Grid.read(f"grid{i}.tif") for i in range(1, 6)]
 
 # Merge with custom priorities (higher = more important)
 priorities = [1, 2, 1, 3, 1]
@@ -164,20 +236,41 @@ merged = GridMerger.merge_multiple_grids(
     feather=True
 )
 
-# Save result
-merged.write_ers("merged.ers")
+# Save result (any format)
+merged.write("merged.tif")
 ```
 
 ## File Format Support
 
-GridMerge currently supports the **ER Mapper (.ers)** format:
+GridMerge supports multiple grid formats with automatic format detection:
 
-- **Input**: ER Mapper header (.ers) with binary data file
-- **Output**: ER Mapper format with IEEE 4-byte real data type
+### ER Mapper (.ers)
+- **Input/Output**: ER Mapper header (.ers) with binary data file
+- **Data type**: IEEE 4-byte real
+- **Structure**: Text header file (.ers) + binary data file
+- **Metadata**: Projection, datum, coordinate system, cell size, null value
+- **Always available** (no extra dependencies)
 
-The ER Mapper format consists of:
-- A text header file (.ers) containing metadata
-- A binary data file containing grid values
+### GeoTIFF (.tif, .tiff)
+- **Input/Output**: Industry-standard georeferenced TIFF format
+- **Requirements**: `rasterio` or GDAL (`pip install rasterio`)
+- **Metadata**: Full CRS support, geotransform
+- **Widely compatible** with GIS software
+
+### ASCII Grid (.asc, .grd)
+- **Input/Output**: Simple text-based grid format
+- **Structure**: Header rows + space-separated data values
+- **Widely supported** by many GIS and geophysical software
+- **Always available** (no extra dependencies)
+
+### Format Mixing
+
+**Key advantage**: You can mix formats freely! For example:
+- Read GeoTIFF from remote sensing
+- Read ASCII Grid from legacy surveys
+- Read ER Mapper from recent geophysical surveys
+- Merge them all together
+- Output in your preferred format
 
 ## Algorithms
 

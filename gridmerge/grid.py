@@ -2,13 +2,17 @@
 Grid data structure and I/O operations.
 
 This module provides the Grid class for representing gridded geophysical data,
-along with readers and writers for ER Mapper (.ers) format.
+along with readers and writers for multiple formats:
+- ER Mapper (.ers)
+- GeoTIFF (.tif, .tiff) - requires rasterio or GDAL
+- ASCII Grid (.asc, .grd)
 """
 
 import numpy as np
 import os
 from typing import Optional, Tuple, Dict, Any
 import struct
+import warnings
 
 
 class Grid:
@@ -272,3 +276,312 @@ class Grid:
             f.write(f"    RegistrationCoordX = {reg_coord_x}\n")
             f.write(f"    RegistrationCoordY = {reg_coord_y}\n")
             f.write("RasterInfo End\n")
+    
+    @staticmethod
+    def read_ascii(filepath: str) -> 'Grid':
+        """
+        Read an ASCII Grid (.asc, .grd) format grid.
+        
+        Args:
+            filepath: Path to ASCII grid file
+            
+        Returns:
+            Grid object
+        """
+        header = {}
+        header_lines = 0
+        
+        # Read header
+        with open(filepath, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split()
+                if len(parts) == 2:
+                    key = parts[0].lower()
+                    if key in ['ncols', 'nrows', 'xllcorner', 'yllcorner', 
+                              'xllcenter', 'yllcenter', 'cellsize', 'nodata_value']:
+                        header[key] = float(parts[1]) if '.' in parts[1] else int(parts[1])
+                        header_lines += 1
+                    else:
+                        break
+                else:
+                    break
+        
+        # Parse header
+        ncols = int(header.get('ncols', 0))
+        nrows = int(header.get('nrows', 0))
+        cellsize = float(header.get('cellsize', 1.0))
+        nodata_value = float(header.get('nodata_value', -9999.0))
+        
+        # Determine lower-left corner (can be corner or center)
+        if 'xllcorner' in header:
+            xmin = float(header['xllcorner'])
+            ymin = float(header['yllcorner'])
+        elif 'xllcenter' in header:
+            xmin = float(header['xllcenter']) - cellsize / 2
+            ymin = float(header['yllcenter']) - cellsize / 2
+        else:
+            xmin = 0.0
+            ymin = 0.0
+        
+        # Read data
+        data = np.loadtxt(filepath, skiprows=header_lines, dtype=np.float32)
+        
+        if data.shape != (nrows, ncols):
+            raise ValueError(f"Data shape {data.shape} does not match header ({nrows}, {ncols})")
+        
+        return Grid(data, xmin, ymin, cellsize, nodata_value)
+    
+    def write_ascii(self, filepath: str):
+        """
+        Write grid to ASCII Grid (.asc) format.
+        
+        Args:
+            filepath: Path for output ASCII grid file
+        """
+        with open(filepath, 'w') as f:
+            f.write(f"ncols {self.ncols}\n")
+            f.write(f"nrows {self.nrows}\n")
+            f.write(f"xllcorner {self.xmin}\n")
+            f.write(f"yllcorner {self.ymin}\n")
+            f.write(f"cellsize {self.cellsize}\n")
+            f.write(f"NODATA_value {self.nodata_value}\n")
+            
+            # Write data
+            np.savetxt(f, self.data, fmt='%.6f')
+    
+    @staticmethod
+    def read_geotiff(filepath: str) -> 'Grid':
+        """
+        Read a GeoTIFF (.tif, .tiff) format grid.
+        
+        Requires rasterio or GDAL to be installed.
+        
+        Args:
+            filepath: Path to GeoTIFF file
+            
+        Returns:
+            Grid object
+        """
+        try:
+            import rasterio
+            from rasterio.transform import Affine
+            
+            with rasterio.open(filepath) as src:
+                data = src.read(1).astype(np.float32)
+                transform = src.transform
+                nodata_value = src.nodata if src.nodata is not None else -99999.0
+                
+                # Extract geotransform parameters
+                xmin = transform.c
+                ymax = transform.f
+                cellsize = transform.a
+                
+                nrows, ncols = data.shape
+                ymin = ymax - nrows * cellsize
+                
+                # Get projection info
+                metadata = {
+                    'projection': src.crs.to_string() if src.crs else 'GEODETIC',
+                    'datum': 'WGS84',
+                    'crs': src.crs
+                }
+                
+                return Grid(data, xmin, ymin, cellsize, nodata_value, metadata)
+                
+        except ImportError:
+            # Try GDAL as fallback
+            try:
+                from osgeo import gdal
+                
+                ds = gdal.Open(filepath)
+                if ds is None:
+                    raise ValueError(f"Could not open {filepath}")
+                
+                band = ds.GetRasterBand(1)
+                data = band.ReadAsArray().astype(np.float32)
+                nodata_value = band.GetNoDataValue()
+                if nodata_value is None:
+                    nodata_value = -99999.0
+                
+                geotransform = ds.GetGeoTransform()
+                xmin = geotransform[0]
+                ymax = geotransform[3]
+                cellsize = geotransform[1]
+                
+                nrows, ncols = data.shape
+                ymin = ymax - nrows * cellsize
+                
+                # Get projection
+                proj = ds.GetProjection()
+                metadata = {
+                    'projection': proj if proj else 'GEODETIC',
+                    'datum': 'WGS84'
+                }
+                
+                ds = None  # Close dataset
+                
+                return Grid(data, xmin, ymin, cellsize, nodata_value, metadata)
+                
+            except ImportError:
+                raise ImportError(
+                    "GeoTIFF support requires either 'rasterio' or 'gdal' package. "
+                    "Install with: pip install rasterio"
+                )
+    
+    def write_geotiff(self, filepath: str):
+        """
+        Write grid to GeoTIFF (.tif) format.
+        
+        Requires rasterio or GDAL to be installed.
+        
+        Args:
+            filepath: Path for output GeoTIFF file
+        """
+        try:
+            import rasterio
+            from rasterio.transform import Affine
+            from rasterio.crs import CRS
+            
+            # Create transform
+            transform = Affine.translation(self.xmin, self.ymax) * Affine.scale(self.cellsize, -self.cellsize)
+            
+            # Determine CRS
+            if 'crs' in self.metadata:
+                crs = self.metadata['crs']
+            elif 'projection' in self.metadata:
+                try:
+                    crs = CRS.from_string(self.metadata['projection'])
+                except:
+                    crs = CRS.from_epsg(4326)  # Default to WGS84
+            else:
+                crs = CRS.from_epsg(4326)
+            
+            # Write file
+            with rasterio.open(
+                filepath,
+                'w',
+                driver='GTiff',
+                height=self.nrows,
+                width=self.ncols,
+                count=1,
+                dtype=self.data.dtype,
+                crs=crs,
+                transform=transform,
+                nodata=self.nodata_value
+            ) as dst:
+                dst.write(self.data, 1)
+                
+        except ImportError:
+            # Try GDAL as fallback
+            try:
+                from osgeo import gdal, osr
+                
+                driver = gdal.GetDriverByName('GTiff')
+                ds = driver.Create(filepath, self.ncols, self.nrows, 1, gdal.GDT_Float32)
+                
+                # Set geotransform
+                geotransform = (self.xmin, self.cellsize, 0, self.ymax, 0, -self.cellsize)
+                ds.SetGeoTransform(geotransform)
+                
+                # Set projection
+                srs = osr.SpatialReference()
+                if 'projection' in self.metadata:
+                    srs.ImportFromWkt(self.metadata['projection'])
+                else:
+                    srs.ImportFromEPSG(4326)
+                ds.SetProjection(srs.ExportToWkt())
+                
+                # Write data
+                band = ds.GetRasterBand(1)
+                band.WriteArray(self.data)
+                band.SetNoDataValue(self.nodata_value)
+                
+                ds.FlushCache()
+                ds = None
+                
+            except ImportError:
+                raise ImportError(
+                    "GeoTIFF support requires either 'rasterio' or 'gdal' package. "
+                    "Install with: pip install rasterio"
+                )
+    
+    @staticmethod
+    def detect_format(filepath: str) -> str:
+        """
+        Detect grid format from file extension.
+        
+        Args:
+            filepath: Path to grid file
+            
+        Returns:
+            Format string: 'ers', 'geotiff', or 'ascii'
+        """
+        ext = os.path.splitext(filepath)[1].lower()
+        
+        if ext == '.ers':
+            return 'ers'
+        elif ext in ['.tif', '.tiff']:
+            return 'geotiff'
+        elif ext in ['.asc', '.grd']:
+            return 'ascii'
+        else:
+            # Try to guess from content
+            if os.path.exists(filepath):
+                with open(filepath, 'rb') as f:
+                    magic = f.read(4)
+                    if magic[:2] == b'II' or magic[:2] == b'MM':
+                        return 'geotiff'
+            
+            # Default to ASCII if text file
+            return 'ascii'
+    
+    @staticmethod
+    def read(filepath: str, format: Optional[str] = None) -> 'Grid':
+        """
+        Read a grid from file, auto-detecting format if not specified.
+        
+        Args:
+            filepath: Path to grid file
+            format: Format string ('ers', 'geotiff', 'ascii') or None for auto-detect
+            
+        Returns:
+            Grid object
+        """
+        if format is None:
+            format = Grid.detect_format(filepath)
+        
+        format = format.lower()
+        
+        if format == 'ers':
+            return Grid.read_ers(filepath)
+        elif format == 'geotiff':
+            return Grid.read_geotiff(filepath)
+        elif format == 'ascii':
+            return Grid.read_ascii(filepath)
+        else:
+            raise ValueError(f"Unsupported format: {format}")
+    
+    def write(self, filepath: str, format: Optional[str] = None):
+        """
+        Write grid to file, auto-detecting format if not specified.
+        
+        Args:
+            filepath: Path for output file
+            format: Format string ('ers', 'geotiff', 'ascii') or None for auto-detect
+        """
+        if format is None:
+            format = Grid.detect_format(filepath)
+        
+        format = format.lower()
+        
+        if format == 'ers':
+            self.write_ers(filepath)
+        elif format == 'geotiff':
+            self.write_geotiff(filepath)
+        elif format == 'ascii':
+            self.write_ascii(filepath)
+        else:
+            raise ValueError(f"Unsupported format: {format}")

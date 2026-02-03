@@ -18,7 +18,7 @@ def merge_command(args):
     grids = []
     for filepath in args.input:
         try:
-            grid = Grid.read_ers(filepath)
+            grid = Grid.read(filepath)  # Auto-detect format
             grids.append(grid)
             print(f"  Loaded: {filepath} ({grid.nrows}x{grid.ncols})")
         except Exception as e:
@@ -61,7 +61,7 @@ def merge_command(args):
     # Save output
     print(f"\nSaving to {args.output}...")
     try:
-        result.write_ers(args.output)
+        result.write(args.output)  # Auto-detect format
         print("Done!")
     except Exception as e:
         print(f"Error saving output: {e}", file=sys.stderr)
@@ -75,7 +75,7 @@ def level_command(args):
     # Load grids
     print(f"Loading reference grid: {args.reference}")
     try:
-        reference = Grid.read_ers(args.reference)
+        reference = Grid.read(args.reference)  # Auto-detect format
         print(f"  Reference: {reference.nrows}x{reference.ncols}")
     except Exception as e:
         print(f"Error loading reference grid: {e}", file=sys.stderr)
@@ -83,7 +83,7 @@ def level_command(args):
     
     print(f"Loading grid to adjust: {args.input}")
     try:
-        grid = Grid.read_ers(args.input)
+        grid = Grid.read(args.input)  # Auto-detect format
         print(f"  Input: {grid.nrows}x{grid.ncols}")
     except Exception as e:
         print(f"Error loading input grid: {e}", file=sys.stderr)
@@ -106,7 +106,7 @@ def level_command(args):
     # Save output
     print(f"\nSaving to {args.output}...")
     try:
-        result.write_ers(args.output)
+        result.write(args.output)  # Auto-detect format
         print("Done!")
     except Exception as e:
         print(f"Error saving output: {e}", file=sys.stderr)
@@ -120,7 +120,12 @@ def info_command(args):
     for filepath in args.input:
         print(f"\nGrid: {filepath}")
         try:
-            grid = Grid.read_ers(filepath)
+            grid = Grid.read(filepath)  # Auto-detect format
+            
+            # Detect and display format
+            detected_format = Grid.detect_format(filepath)
+            print(f"  Format: {detected_format.upper()}")
+            
             print(f"  Dimensions: {grid.nrows} rows x {grid.ncols} columns")
             print(f"  Cell size: {grid.cellsize}")
             print(f"  Bounds: ({grid.xmin}, {grid.ymin}) to ({grid.xmax}, {grid.ymax})")
@@ -150,18 +155,25 @@ def main():
         description='GridMerge: Level and merge gridded geophysical data',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
+Supported Formats:
+  - ER Mapper (.ers)
+  - GeoTIFF (.tif, .tiff) - requires rasterio or GDAL
+  - ASCII Grid (.asc, .grd)
+  
+  Format is auto-detected from file extension. You can mix different formats!
+
 Examples:
-  # Merge grids with automatic leveling
-  gridmerge merge grid1.ers grid2.ers grid3.ers -o merged.ers --auto
+  # Merge grids with automatic leveling (mixed formats)
+  gridmerge merge grid1.tif grid2.asc grid3.ers -o merged.tif --auto
   
   # Merge with manual control
-  gridmerge merge grid1.ers grid2.ers -o merged.ers --dc-shift --polynomial 1
+  gridmerge merge grid1.ers grid2.ers -o merged.tif --dc-shift --polynomial 1
   
-  # Level one grid to another
-  gridmerge level reference.ers input.ers -o leveled.ers --dc-shift --polynomial 2
+  # Level one grid to another (different formats)
+  gridmerge level reference.tif input.asc -o leveled.ers --dc-shift --polynomial 2
   
   # Display grid information
-  gridmerge info grid1.ers grid2.ers
+  gridmerge info grid1.tif grid2.asc grid3.ers
         """
     )
     
@@ -169,8 +181,8 @@ Examples:
     
     # Merge command
     merge_parser = subparsers.add_parser('merge', help='Merge multiple grids')
-    merge_parser.add_argument('input', nargs='+', help='Input grid files (.ers)')
-    merge_parser.add_argument('-o', '--output', required=True, help='Output grid file (.ers)')
+    merge_parser.add_argument('input', nargs='+', help='Input grid files (any supported format)')
+    merge_parser.add_argument('-o', '--output', required=True, help='Output grid file (format auto-detected from extension)')
     merge_parser.add_argument('--auto', action='store_true',
                             help='Use automatic leveling with default settings')
     merge_parser.add_argument('--level', action='store_true', default=True,
@@ -195,9 +207,9 @@ Examples:
     
     # Level command
     level_parser = subparsers.add_parser('level', help='Level one grid to a reference')
-    level_parser.add_argument('reference', help='Reference grid file (.ers)')
-    level_parser.add_argument('input', help='Input grid file to level (.ers)')
-    level_parser.add_argument('-o', '--output', required=True, help='Output grid file (.ers)')
+    level_parser.add_argument('reference', help='Reference grid file (any supported format)')
+    level_parser.add_argument('input', help='Input grid file to level (any supported format)')
+    level_parser.add_argument('-o', '--output', required=True, help='Output grid file (format auto-detected from extension)')
     level_parser.add_argument('--dc-shift', action='store_true', default=True,
                             help='Apply DC shift correction (default: True)')
     level_parser.add_argument('--no-dc-shift', dest='dc_shift', action='store_false',
@@ -212,7 +224,7 @@ Examples:
     
     # Info command
     info_parser = subparsers.add_parser('info', help='Display grid information')
-    info_parser.add_argument('input', nargs='+', help='Input grid file(s) (.ers)')
+    info_parser.add_argument('input', nargs='+', help='Input grid file(s) (any supported format)')
     info_parser.set_defaults(func=info_command)
     
     # Parse arguments
