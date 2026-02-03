@@ -221,8 +221,8 @@ class GridMerger:
         if priorities is not None:
             if len(priorities) != len(working_grids):
                 raise ValueError("Number of priorities must match number of grids")
-            # Sort in descending priority order
-            sorted_pairs = sorted(zip(priorities, working_grids), reverse=True)
+            # Sort in descending priority order (use key to avoid Grid comparison)
+            sorted_pairs = sorted(zip(priorities, working_grids), key=lambda x: x[0], reverse=True)
             working_grids = [g for _, g in sorted_pairs]
         
         # Merge grids sequentially
