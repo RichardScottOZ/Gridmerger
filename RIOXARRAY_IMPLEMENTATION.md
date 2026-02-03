@@ -1,10 +1,6 @@
 # rioxarray Implementation Summary
 
-## Response to User Request
 
-**User asked:** "you should use rioxarray as a resampling option for grids of different resolutions and of course for reprojection too when needed given these are gdal useable grids ... could add doing this to a reference grid and crs to the library?"
-
-**Answer:** Yes! Fully implemented across 3 commits (36e311d, 0842c22, f8bbe9e).
 
 ## What Was Added
 
