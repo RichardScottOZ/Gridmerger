@@ -67,8 +67,14 @@ class GridMerger:
         xmax = max(grid1.xmax, grid2.xmax)
         ymax = max(grid1.ymax, grid2.ymax)
         
-        # Use first grid's cell size (assume they match)
+        # Validate cellsize compatibility
         cellsize = grid1.cellsize
+        if not np.isclose(grid1.cellsize, grid2.cellsize, rtol=1e-5):
+            import warnings
+            warnings.warn(
+                f"Grids have different cell sizes ({grid1.cellsize} vs {grid2.cellsize}). "
+                f"Using first grid's cell size ({cellsize}). Results may be inaccurate."
+            )
         
         # Calculate output grid dimensions
         ncols = int(np.round((xmax - xmin) / cellsize))
@@ -83,8 +89,9 @@ class GridMerger:
             weight2 = np.zeros((nrows, ncols), dtype=np.float32)
         
         # Place grid1 data
+        # Note: row 0 = topmost (ymax), so row offset is from the top
         col1_start = int(np.round((grid1.xmin - xmin) / cellsize))
-        row1_start = int(np.round((grid1.ymin - ymin) / cellsize))
+        row1_start = int(np.round((ymax - grid1.ymax) / cellsize))
         col1_end = col1_start + grid1.ncols
         row1_end = row1_start + grid1.nrows
         
@@ -102,7 +109,7 @@ class GridMerger:
         
         # Place grid2 data
         col2_start = int(np.round((grid2.xmin - xmin) / cellsize))
-        row2_start = int(np.round((grid2.ymin - ymin) / cellsize))
+        row2_start = int(np.round((ymax - grid2.ymax) / cellsize))
         col2_end = col2_start + grid2.ncols
         row2_end = row2_start + grid2.nrows
         
