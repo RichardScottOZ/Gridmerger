@@ -315,7 +315,10 @@ class Grid:
                         try:
                             header[key] = int(parts[1])
                         except ValueError:
-                            header[key] = float(parts[1])
+                            try:
+                                header[key] = float(parts[1])
+                            except ValueError:
+                                break
                         header_lines += 1
                     else:
                         break

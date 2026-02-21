@@ -8,6 +8,7 @@ This module provides algorithms for merging multiple grids with:
 """
 
 import numpy as np
+import warnings
 from typing import List, Optional, Tuple
 from .grid import Grid
 from .adjust import GridAdjuster
@@ -70,7 +71,6 @@ class GridMerger:
         # Validate cellsize compatibility
         cellsize = grid1.cellsize
         if not np.isclose(grid1.cellsize, grid2.cellsize, rtol=1e-5):
-            import warnings
             warnings.warn(
                 f"Grids have different cell sizes ({grid1.cellsize} vs {grid2.cellsize}). "
                 f"Using first grid's cell size ({cellsize}). Results may be inaccurate."

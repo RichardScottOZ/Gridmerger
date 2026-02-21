@@ -144,10 +144,10 @@ class TestNaNHandling:
         grid = Grid(data, xmin=0, ymin=0, cellsize=1, nodata_value=-99999.0)
 
         mask = grid.get_valid_mask()
-        assert mask[0, 0] is np.True_
-        assert mask[0, 1] is np.False_  # NaN should be invalid
-        assert mask[0, 2] is np.True_
-        assert mask[1, 2] is np.False_  # NaN should be invalid
+        assert mask[0, 0] == True
+        assert mask[0, 1] == False  # NaN should be invalid
+        assert mask[0, 2] == True
+        assert mask[1, 2] == False  # NaN should be invalid
 
     def test_nan_excluded_from_valid_data(self):
         """Test that NaN values are excluded from valid data."""
