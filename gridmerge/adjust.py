@@ -255,8 +255,9 @@ class GridAdjuster:
         rows, cols = np.mgrid[r2.start:r2.stop, c2.start:c2.stop]
         
         # Convert to real-world coordinates
+        # Row 0 = topmost (ymax), so y decreases with increasing row index
         x = grid2.xmin + cols * grid2.cellsize
-        y = grid2.ymin + rows * grid2.cellsize
+        y = grid2.ymax - rows * grid2.cellsize
         
         # Flatten and filter
         x_flat = x[valid_mask].flatten()
@@ -285,9 +286,10 @@ class GridAdjuster:
         result = grid.copy()
         
         # Create coordinate arrays
+        # Row 0 = topmost (ymax), so y decreases with increasing row index
         rows, cols = np.mgrid[0:grid.nrows, 0:grid.ncols]
         x = grid.xmin + cols * grid.cellsize
-        y = grid.ymin + rows * grid.cellsize
+        y = grid.ymax - rows * grid.cellsize
         
         # Evaluate polynomial
         correction = GridAdjuster.evaluate_polynomial_2d(x, y, coeffs, degree)

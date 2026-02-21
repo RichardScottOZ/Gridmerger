@@ -79,8 +79,7 @@ class Grid:
         Returns:
             1D array of valid grid values
         """
-        mask = self.data != self.nodata_value
-        return self.data[mask]
+        return self.data[self.get_valid_mask()]
     
     def get_valid_mask(self) -> np.ndarray:
         """
@@ -89,7 +88,7 @@ class Grid:
         Returns:
             2D boolean array (True for valid data, False for nodata)
         """
-        return self.data != self.nodata_value
+        return (self.data != self.nodata_value) & np.isfinite(self.data)
     
     def copy(self) -> 'Grid':
         """
@@ -133,16 +132,17 @@ class Grid:
             return None
         
         # Convert to pixel coordinates for self
+        # Note: row 0 = topmost (ymax), so we measure rows from the top
         self_col_start = int(np.round((overlap_xmin - self.xmin) / self.cellsize))
         self_col_end = int(np.round((overlap_xmax - self.xmin) / self.cellsize))
-        self_row_start = int(np.round((overlap_ymin - self.ymin) / self.cellsize))
-        self_row_end = int(np.round((overlap_ymax - self.ymin) / self.cellsize))
+        self_row_start = int(np.round((self.ymax - overlap_ymax) / self.cellsize))
+        self_row_end = int(np.round((self.ymax - overlap_ymin) / self.cellsize))
         
         # Convert to pixel coordinates for other
         other_col_start = int(np.round((overlap_xmin - other.xmin) / other.cellsize))
         other_col_end = int(np.round((overlap_xmax - other.xmin) / other.cellsize))
-        other_row_start = int(np.round((overlap_ymin - other.ymin) / other.cellsize))
-        other_row_end = int(np.round((overlap_ymax - other.ymin) / other.cellsize))
+        other_row_start = int(np.round((other.ymax - overlap_ymax) / other.cellsize))
+        other_row_end = int(np.round((other.ymax - overlap_ymin) / other.cellsize))
         
         return (
             slice(self_row_start, self_row_end),
@@ -221,6 +221,11 @@ class Grid:
             'header': header
         }
         
+        # Preserve CRS if stored in header
+        crs_value = header.get('CRS', None)
+        if crs_value:
+            metadata['crs'] = crs_value
+        
         return Grid(data, xmin, ymin, cellsize, nodata_value, metadata)
     
     def write_ers(self, filepath: str):
@@ -276,6 +281,11 @@ class Grid:
             f.write(f"    RegistrationCoordX = {reg_coord_x}\n")
             f.write(f"    RegistrationCoordY = {reg_coord_y}\n")
             f.write("RasterInfo End\n")
+            
+            # Store CRS if available
+            crs_value = self.metadata.get('crs', None)
+            if crs_value:
+                f.write(f"\nCRS = {crs_value}\n")
     
     @staticmethod
     def read_ascii(filepath: str) -> 'Grid':
@@ -302,7 +312,13 @@ class Grid:
                     key = parts[0].lower()
                     if key in ['ncols', 'nrows', 'xllcorner', 'yllcorner', 
                               'xllcenter', 'yllcenter', 'cellsize', 'nodata_value']:
-                        header[key] = float(parts[1]) if '.' in parts[1] else int(parts[1])
+                        try:
+                            header[key] = int(parts[1])
+                        except ValueError:
+                            try:
+                                header[key] = float(parts[1])
+                            except ValueError:
+                                break
                         header_lines += 1
                     else:
                         break
@@ -454,7 +470,7 @@ class Grid:
             elif 'projection' in self.metadata:
                 try:
                     crs = CRS.from_string(self.metadata['projection'])
-                except:
+                except Exception:
                     crs = CRS.from_epsg(4326)  # Default to WGS84
             else:
                 crs = CRS.from_epsg(4326)
