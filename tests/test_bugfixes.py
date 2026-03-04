@@ -7,6 +7,8 @@ These tests validate fixes for:
 - ERS CRS metadata preservation
 - ASCII header parsing robustness
 - Cellsize validation warning in merge
+- Large UTM coordinates causing LAPACK DGELSD error (Intel oneMKL Parameter 6)
+- NaN/Inf filtering in DC shift, scale, and polynomial overlap calculations
 """
 
 import numpy as np
@@ -348,6 +350,136 @@ class TestFeatheringSmallOverlap:
         assert not np.any(np.isnan(merged_fd5.data))
         assert (merged_fd1.data[:, 20:] != -99999.0).all()
         assert (merged_fd5.data[:, 20:] != -99999.0).all()
+
+
+class TestLargeUTMCoordinates:
+    """Tests for polynomial fitting with large UTM-scale coordinates.
+
+    Real projected coordinate systems (e.g. EPSG:32754 UTM zone 54S) have
+    easting values ~100 000–900 000 and northing values ~0–10 000 000.
+    Without coordinate normalisation, the design matrix becomes extremely
+    ill-conditioned and LAPACK's DGELSD routine raises:
+      "Intel oneMKL ERROR: Parameter 6 was incorrect on entry to DGELSD"
+    """
+
+    def test_polynomial_fit_utm_coordinates_degree1(self):
+        """fit_surface_in_overlap must not raise a LAPACK error for UTM coordinates."""
+        # Simulate two overlapping grids with EPSG:32754-scale coordinates
+        # (UTM zone 54S: easting ~500000, northing ~7000000)
+        data1 = np.full((100, 100), 50.0, dtype=np.float32)
+        grid1 = Grid(data1, xmin=500000.0, ymin=7000000.0, cellsize=100.0)
+
+        data2 = np.full((100, 100), 60.0, dtype=np.float32)
+        grid2 = Grid(data2, xmin=505000.0, ymin=7000000.0, cellsize=100.0)
+
+        # Must complete without error and return valid coefficients
+        coeffs = GridAdjuster.fit_surface_in_overlap(grid1, grid2, degree=1)
+        assert coeffs is not None
+        # Constant difference of -10.0 → intercept ≈ -10, slopes ≈ 0
+        assert abs(coeffs[0] - (-10.0)) < 0.1
+        assert abs(coeffs[1]) < 0.01
+        assert abs(coeffs[2]) < 0.01
+
+    def test_polynomial_fit_utm_coordinates_degree2(self):
+        """Degree-2 polynomial fitting must work with UTM-scale coordinates."""
+        data1 = np.full((100, 100), 50.0, dtype=np.float32)
+        grid1 = Grid(data1, xmin=500000.0, ymin=7000000.0, cellsize=100.0)
+
+        data2 = np.full((100, 100), 60.0, dtype=np.float32)
+        grid2 = Grid(data2, xmin=505000.0, ymin=7000000.0, cellsize=100.0)
+
+        coeffs = GridAdjuster.fit_surface_in_overlap(grid1, grid2, degree=2)
+        assert coeffs is not None
+
+    def test_merge_with_auto_leveling_utm_coordinates(self):
+        """merge_with_auto_leveling must succeed with UTM-scale coordinates."""
+        data1 = np.full((100, 100), 50.0, dtype=np.float32)
+        grid1 = Grid(data1, xmin=500000.0, ymin=7000000.0, cellsize=100.0)
+
+        data2 = np.full((100, 100), 60.0, dtype=np.float32)
+        grid2 = Grid(data2, xmin=505000.0, ymin=7000000.0, cellsize=100.0)
+
+        merged = GridMerger.merge_with_auto_leveling([grid1, grid2],
+                                                      polynomial_degree=1)
+        assert merged is not None
+        valid = merged.get_valid_data()
+        assert len(valid) > 0
+        assert np.all(np.isfinite(valid))
+
+    def test_dc_shift_utm_coordinates(self):
+        """DC shift calculation must work with UTM-scale coordinates."""
+        data1 = np.full((50, 50), 100.0, dtype=np.float32)
+        grid1 = Grid(data1, xmin=300000.0, ymin=6500000.0, cellsize=1000.0)
+
+        data2 = np.full((50, 50), 115.0, dtype=np.float32)
+        grid2 = Grid(data2, xmin=320000.0, ymin=6500000.0, cellsize=1000.0)
+
+        dc_shift = GridAdjuster.calculate_dc_shift(grid1, grid2)
+        assert dc_shift is not None
+        assert abs(dc_shift - (-15.0)) < 0.1
+
+
+class TestNaNFilteringInAdjustment:
+    """Tests for NaN/Inf filtering in DC shift, scale, and polynomial adjustment."""
+
+    def test_dc_shift_ignores_nan_in_overlap(self):
+        """DC shift must ignore NaN values in the overlap region."""
+        data1 = np.full((10, 20), 100.0, dtype=np.float32)
+        grid1 = Grid(data1, xmin=0, ymin=0, cellsize=1)
+
+        data2 = np.full((10, 20), 110.0, dtype=np.float32)
+        data2[:, :5] = np.nan  # NaN in first columns (overlap zone)
+        grid2 = Grid(data2, xmin=10, ymin=0, cellsize=1)
+
+        # Should still compute a valid DC shift from non-NaN overlap cells
+        dc_shift = GridAdjuster.calculate_dc_shift(grid1, grid2)
+        assert dc_shift is not None
+        assert abs(dc_shift - (-10.0)) < 0.5
+
+    def test_scale_factor_ignores_nan_in_overlap(self):
+        """Scale factor calculation must ignore NaN values in the overlap region."""
+        np.random.seed(1)
+        data1 = (np.random.rand(20, 20) * 10 + 100).astype(np.float32)
+        grid1 = Grid(data1, xmin=0, ymin=0, cellsize=1)
+
+        data2 = (np.random.rand(20, 20) * 20 + 100).astype(np.float32)
+        data2[:3, 10:] = np.nan  # some NaN in the overlap
+        grid2 = Grid(data2, xmin=10, ymin=0, cellsize=1)
+
+        scale = GridAdjuster.calculate_scale_factor(grid1, grid2)
+        assert scale is not None
+        assert np.isfinite(scale)
+
+    def test_polynomial_fit_ignores_nan_values(self):
+        """fit_surface_in_overlap must ignore NaN values when computing the fit."""
+        data1 = np.full((20, 20), 50.0, dtype=np.float32)
+        grid1 = Grid(data1, xmin=0, ymin=0, cellsize=1)
+
+        data2 = np.full((20, 20), 60.0, dtype=np.float32)
+        data2[:5, 10:] = np.nan  # NaN in part of the overlap
+        grid2 = Grid(data2, xmin=10, ymin=0, cellsize=1)
+
+        coeffs = GridAdjuster.fit_surface_in_overlap(grid1, grid2, degree=1)
+        assert coeffs is not None
+        # Constant difference −10 in valid cells → intercept ≈ −10
+        assert abs(coeffs[0] - (-10.0)) < 1.0
+
+    def test_polynomial_fit_insufficient_points_returns_none(self):
+        """fit_surface_in_overlap returns None when not enough valid overlap points."""
+        # grid1 and grid2 share exactly 1 column of overlap (x=4..5)
+        # In that column, all cells in grid2 are NaN → 0 valid points → None
+        data1 = np.full((5, 5), 100.0, dtype=np.float32)
+        grid1 = Grid(data1, xmin=0, ymin=0, cellsize=1)
+
+        data2 = np.full((5, 5), 110.0, dtype=np.float32)
+        data2[:, 0] = np.nan  # NaN in the single overlap column of grid2
+        grid2 = Grid(data2, xmin=4, ymin=0, cellsize=1)
+
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            coeffs = GridAdjuster.fit_surface_in_overlap(grid1, grid2, degree=1)
+        # Zero valid overlap points → must return None
+        assert coeffs is None
 
 
 if __name__ == "__main__":
