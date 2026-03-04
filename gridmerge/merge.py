@@ -83,11 +83,6 @@ class GridMerger:
         # Initialize output grid
         output_data = np.full((nrows, ncols), grid1.nodata_value, dtype=np.float32)
         
-        # Create weight arrays if feathering
-        if feather:
-            weight1 = np.zeros((nrows, ncols), dtype=np.float32)
-            weight2 = np.zeros((nrows, ncols), dtype=np.float32)
-        
         # Place grid1 data
         # Note: row 0 = topmost (ymax), so row offset is from the top
         col1_start = int(np.round((grid1.xmin - xmin) / cellsize))
@@ -95,25 +90,17 @@ class GridMerger:
         col1_end = col1_start + grid1.ncols
         row1_end = row1_start + grid1.nrows
         
-        valid1 = grid1.data != grid1.nodata_value
-        output_data[row1_start:row1_end, col1_start:col1_end][valid1] = grid1.data[valid1]
-        
-        if feather:
-            from scipy import ndimage
-            distance1 = ndimage.distance_transform_edt(valid1)
-            if distance1.max() > 0:
-                w1 = distance1 / distance1.max()
-            else:
-                w1 = valid1.astype(float)
-            weight1[row1_start:row1_end, col1_start:col1_end] = w1
-        
-        # Place grid2 data
+        # Place grid2 data positions
         col2_start = int(np.round((grid2.xmin - xmin) / cellsize))
         row2_start = int(np.round((ymax - grid2.ymax) / cellsize))
         col2_end = col2_start + grid2.ncols
         row2_end = row2_start + grid2.nrows
         
-        valid2 = grid2.data != grid2.nodata_value
+        # Use get_valid_mask() to properly handle NaN and Inf as invalid
+        valid1 = grid1.get_valid_mask()
+        valid2 = grid2.get_valid_mask()
+        
+        output_data[row1_start:row1_end, col1_start:col1_end][valid1] = grid1.data[valid1]
         
         # Determine how to handle overlap
         if priority == 'second':
@@ -122,17 +109,42 @@ class GridMerger:
         elif priority == 'first':
             # Grid1 has priority, only fill where grid1 has no data
             overlap_slice = (slice(row2_start, row2_end), slice(col2_start, col2_end))
-            no_data_in_grid1 = output_data[overlap_slice] == grid1.nodata_value
+            no_data_in_grid1 = (output_data[overlap_slice] == grid1.nodata_value) | ~np.isfinite(output_data[overlap_slice])
             mask = valid2 & no_data_in_grid1
             output_data[row2_start:row2_end, col2_start:col2_end][mask] = grid2.data[mask]
         elif priority == 'blend' and feather:
             # Blend using feathering
             from scipy import ndimage
-            distance2 = ndimage.distance_transform_edt(valid2)
-            if distance2.max() > 0:
-                w2 = distance2 / distance2.max()
+            
+            # Compute feather distance in cells: use overlap size by default so that
+            # cells inside the overlap get smoothly blended while cells outside the
+            # overlap (unique areas) keep full weight (1.0).
+            overlap_col_start = max(col1_start, col2_start)
+            overlap_col_end = min(col1_end, col2_end)
+            overlap_row_start = max(row1_start, row2_start)
+            overlap_row_end = min(row1_end, row2_end)
+            overlap_width = max(0, overlap_col_end - overlap_col_start)
+            overlap_height = max(0, overlap_row_end - overlap_row_start)
+            
+            if feather_distance is not None:
+                fd_cells = max(1.0, feather_distance / cellsize)
             else:
-                w2 = valid2.astype(float)
+                # Default: feather over the overlap extent so unique areas get
+                # full weight, preventing the second grid from becoming null
+                if overlap_width > 0 and overlap_height > 0:
+                    overlap_min_dim = min(overlap_width, overlap_height)
+                else:
+                    overlap_min_dim = max(overlap_width, overlap_height)
+                fd_cells = float(max(1, overlap_min_dim))
+            
+            distance1 = ndimage.distance_transform_edt(valid1)
+            w1 = np.clip(distance1 / fd_cells, 0.0, 1.0).astype(np.float32)
+            weight1 = np.zeros((nrows, ncols), dtype=np.float32)
+            weight1[row1_start:row1_end, col1_start:col1_end] = w1
+            
+            distance2 = ndimage.distance_transform_edt(valid2)
+            w2 = np.clip(distance2 / fd_cells, 0.0, 1.0).astype(np.float32)
+            weight2 = np.zeros((nrows, ncols), dtype=np.float32)
             weight2[row2_start:row2_end, col2_start:col2_end] = w2
             
             # Blend in overlap regions
@@ -156,7 +168,7 @@ class GridMerger:
         else:
             # Default: blend mode without feathering (simple average)
             overlap_slice = (slice(row2_start, row2_end), slice(col2_start, col2_end))
-            has_data_in_grid1 = output_data[overlap_slice] != grid1.nodata_value
+            has_data_in_grid1 = (output_data[overlap_slice] != grid1.nodata_value) & np.isfinite(output_data[overlap_slice])
             mask = valid2 & has_data_in_grid1
             
             if mask.any():
