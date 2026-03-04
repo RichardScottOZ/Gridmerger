@@ -8,6 +8,7 @@ This module provides algorithms for adjusting grids including:
 """
 
 import numpy as np
+import warnings
 from typing import Tuple, Optional
 from .grid import Grid
 
@@ -39,9 +40,9 @@ class GridAdjuster:
         data1 = grid1.data[r1, c1]
         data2 = grid2.data[r2, c2]
         
-        # Get valid data (exclude nodata values)
-        mask1 = data1 != grid1.nodata_value
-        mask2 = data2 != grid2.nodata_value
+        # Get valid data (exclude nodata values and NaN/Inf)
+        mask1 = (data1 != grid1.nodata_value) & np.isfinite(data1)
+        mask2 = (data2 != grid2.nodata_value) & np.isfinite(data2)
         valid_mask = mask1 & mask2
         
         if not np.any(valid_mask):
@@ -77,9 +78,9 @@ class GridAdjuster:
         data1 = grid1.data[r1, c1]
         data2 = grid2.data[r2, c2]
         
-        # Get valid data
-        mask1 = data1 != grid1.nodata_value
-        mask2 = data2 != grid2.nodata_value
+        # Get valid data (exclude nodata values and NaN/Inf)
+        mask1 = (data1 != grid1.nodata_value) & np.isfinite(data1)
+        mask2 = (data2 != grid2.nodata_value) & np.isfinite(data2)
         valid_mask = mask1 & mask2
         
         if not np.any(valid_mask):
@@ -164,6 +165,13 @@ class GridAdjuster:
         Returns:
             Polynomial coefficients
         """
+        n_coeffs = {1: 3, 2: 6, 3: 10}.get(degree, 3)
+        if len(x) < n_coeffs:
+            raise ValueError(
+                f"Need at least {n_coeffs} data points for degree-{degree} polynomial, "
+                f"got {len(x)}"
+            )
+
         # Build design matrix
         if degree == 1:
             # Linear: z = a + bx + cy
@@ -243,12 +251,22 @@ class GridAdjuster:
         # Calculate difference
         diff = data1 - data2
         
-        # Get valid data
-        mask1 = data1 != grid1.nodata_value
-        mask2 = data2 != grid2.nodata_value
-        valid_mask = mask1 & mask2
+        # Get valid data (exclude nodata values and NaN/Inf)
+        mask1 = (data1 != grid1.nodata_value) & np.isfinite(data1)
+        mask2 = (data2 != grid2.nodata_value) & np.isfinite(data2)
+        valid_mask = mask1 & mask2 & np.isfinite(diff)
         
         if not np.any(valid_mask):
+            return None
+        
+        # Check minimum number of points for the requested polynomial degree
+        n_coeffs = {1: 3, 2: 6, 3: 10}.get(degree, 3)
+        n_valid = int(np.sum(valid_mask))
+        if n_valid < n_coeffs:
+            warnings.warn(
+                f"Only {n_valid} valid overlap points for degree-{degree} polynomial "
+                f"(need {n_coeffs}). Skipping polynomial correction."
+            )
             return None
         
         # Get coordinates for overlap region in grid2's coordinate system
@@ -264,10 +282,30 @@ class GridAdjuster:
         y_flat = y[valid_mask].flatten()
         z_flat = diff[valid_mask].flatten()
         
-        # Fit polynomial
-        coeffs = GridAdjuster.fit_polynomial_2d(x_flat, y_flat, z_flat, degree)
+        # Normalize coordinates for numerical stability with large projected
+        # coordinate systems (e.g. UTM/EPSG:32754 where x~500000, y~7000000).
+        # An ill-conditioned design matrix otherwise triggers a LAPACK DGELSD error.
+        x_center = float(x_flat.mean())
+        y_center = float(y_flat.mean())
+        x_scale = float(x_flat.std())
+        y_scale = float(y_flat.std())
+        # Guard against degenerate cases (e.g. single-row/column overlap where
+        # all points share one coordinate and std is 0). Any tiny non-zero std
+        # is a valid normalisation factor; we only fall back to 1.0 when the
+        # std is effectively zero.
+        if x_scale < 1e-10:
+            x_scale = 1.0
+        if y_scale < 1e-10:
+            y_scale = 1.0
+        x_norm = (x_flat - x_center) / x_scale
+        y_norm = (y_flat - y_center) / y_scale
         
-        return coeffs
+        # Fit polynomial on normalized coordinates
+        coeffs = GridAdjuster.fit_polynomial_2d(x_norm, y_norm, z_flat, degree)
+        
+        # Pack normalization parameters alongside the polynomial coefficients so
+        # apply_polynomial_correction can evaluate using the same coordinate space.
+        return np.append(coeffs, [x_center, y_center, x_scale, y_scale])
     
     @staticmethod
     def apply_polynomial_correction(grid: Grid, coeffs: np.ndarray, 
@@ -277,7 +315,8 @@ class GridAdjuster:
         
         Args:
             grid: Input grid
-            coeffs: Polynomial coefficients
+            coeffs: Polynomial coefficients, optionally with normalization
+                parameters appended (as produced by fit_surface_in_overlap)
             degree: Polynomial degree
             
         Returns:
@@ -285,14 +324,32 @@ class GridAdjuster:
         """
         result = grid.copy()
         
+        # Detect whether normalization parameters are packed at the end of
+        # the coefficient array (appended by fit_surface_in_overlap).
+        # Layout: [poly_coeffs..., x_center, y_center, x_scale, y_scale]
+        # The `degree` argument determines the expected polynomial coefficient
+        # count, so the detection is unambiguous.
+        n_poly_coeffs = {1: 3, 2: 6, 3: 10}.get(degree, 3)
+        if len(coeffs) == n_poly_coeffs + 4:
+            x_center, y_center, x_scale, y_scale = coeffs[n_poly_coeffs:]
+            poly_coeffs = coeffs[:n_poly_coeffs]
+        else:
+            # Legacy / direct call path: no normalization
+            x_center, y_center, x_scale, y_scale = 0.0, 0.0, 1.0, 1.0
+            poly_coeffs = coeffs
+        
         # Create coordinate arrays
         # Row 0 = topmost (ymax), so y decreases with increasing row index
         rows, cols = np.mgrid[0:grid.nrows, 0:grid.ncols]
         x = grid.xmin + cols * grid.cellsize
         y = grid.ymax - rows * grid.cellsize
         
+        # Apply the same normalization used during fitting
+        x_norm = (x - x_center) / x_scale
+        y_norm = (y - y_center) / y_scale
+        
         # Evaluate polynomial
-        correction = GridAdjuster.evaluate_polynomial_2d(x, y, coeffs, degree)
+        correction = GridAdjuster.evaluate_polynomial_2d(x_norm, y_norm, poly_coeffs, degree)
         
         # Apply correction to valid data
         valid_mask = result.data != result.nodata_value
