@@ -251,5 +251,104 @@ class TestCellsizeValidation:
             assert len(cellsize_warnings) == 0
 
 
+class TestFeatheringSmallOverlap:
+    """Tests for feathering bug: second grid becomes null with small overlap and nulls."""
+
+    def test_nan_in_grid1_does_not_propagate_to_grid2_area(self):
+        """NaN values in grid1 must not propagate into grid2's area via feathering."""
+        # Grid1 has NaN in the region that overlaps with grid2
+        data1 = np.full((10, 20), 100.0, dtype=np.float32)
+        data1[:, 8:12] = np.nan  # NaN in the overlap zone
+        grid1 = Grid(data1, xmin=0, ymin=0, cellsize=1, nodata_value=-99999.0)
+
+        data2 = np.full((10, 10), 200.0, dtype=np.float32)
+        grid2 = Grid(data2, xmin=10, ymin=0, cellsize=1)
+
+        merged = GridMerger.merge_two_grids(grid1, grid2, priority='blend', feather=True)
+
+        # grid2's area (x=10 to x=20) must have no NaN
+        grid2_area = merged.data[:, 10:]
+        assert not np.any(np.isnan(grid2_area)), "NaN from grid1 must not propagate into grid2 area"
+        assert (grid2_area != -99999.0).all(), "grid2 area must not become null due to NaN propagation"
+
+    def test_small_overlap_with_nulls_grid2_unique_area_preserved(self):
+        """Grid2's unique area must remain valid even with a small overlap and nulls in it."""
+        data1 = np.full((20, 20), 100.0, dtype=np.float32)
+        grid1 = Grid(data1, xmin=0, ymin=0, cellsize=1)
+
+        # Grid2 has nulls in its overlap columns but valid data in its unique area
+        data2 = np.full((20, 20), 200.0, dtype=np.float32)
+        data2[:, :5] = -99999.0  # nulls in the 5-cell overlap region
+        grid2 = Grid(data2, xmin=15, ymin=0, cellsize=1, nodata_value=-99999.0)
+
+        merged = GridMerger.merge_two_grids(grid1, grid2, priority='blend', feather=True)
+
+        # grid2's unique area (x=20 to x=35) must be fully valid (200.0)
+        unique_area = merged.data[:, 20:]
+        assert (unique_area != -99999.0).all(), "grid2 unique area must not become null"
+        assert not np.any(np.isnan(unique_area)), "grid2 unique area must not become NaN"
+        # Verify values are approximately 200.0
+        assert np.allclose(unique_area, 200.0, atol=0.01)
+
+    def test_small_overlap_one_cell_grid2_valid_area_preserved(self):
+        """Grid2's data must appear in output even with a 1-cell overlap."""
+        data1 = np.full((10, 10), 100.0, dtype=np.float32)
+        grid1 = Grid(data1, xmin=0, ymin=0, cellsize=1)
+
+        # Grid2 overlaps by 1 column (x=9-10)
+        data2 = np.full((10, 10), 200.0, dtype=np.float32)
+        grid2 = Grid(data2, xmin=9, ymin=0, cellsize=1)
+
+        merged = GridMerger.merge_two_grids(grid1, grid2, priority='blend', feather=True)
+
+        # grid2's unique area (x=10 to x=19) must be valid
+        unique_area = merged.data[:, 10:]
+        assert (unique_area != -99999.0).all(), "grid2 unique area must not be null with 1-cell overlap"
+        assert not np.any(np.isnan(unique_area))
+
+    def test_grid2_with_scattered_nulls_unique_area_preserved(self):
+        """Grid2 with scattered nulls and small overlap must preserve its unique valid cells."""
+        np.random.seed(42)
+        data1 = np.full((20, 20), 100.0, dtype=np.float32)
+        grid1 = Grid(data1, xmin=0, ymin=0, cellsize=1)
+
+        # Grid2: scattered nulls, 2-cell overlap
+        data2 = np.where(np.random.rand(20, 20) > 0.3, 200.0, -99999.0).astype(np.float32)
+        grid2 = Grid(data2, xmin=18, ymin=0, cellsize=1, nodata_value=-99999.0)
+
+        merged = GridMerger.merge_two_grids(grid1, grid2, priority='blend', feather=True)
+
+        # Check that valid cells in grid2's unique area appear in merged output
+        unique_valid_expected = (data2[:, 2:] != -99999.0).sum()
+        unique_area_merged = merged.data[:, 20:]
+        unique_valid_actual = (unique_area_merged != -99999.0).sum()
+        assert unique_valid_actual == unique_valid_expected, \
+            f"Expected {unique_valid_expected} valid cells in grid2 unique area, got {unique_valid_actual}"
+        assert not np.any(np.isnan(unique_area_merged))
+
+    def test_feather_distance_parameter_respected(self):
+        """feather_distance parameter must limit the feathering zone."""
+        data1 = np.full((10, 20), 100.0, dtype=np.float32)
+        grid1 = Grid(data1, xmin=0, ymin=0, cellsize=1)
+
+        data2 = np.full((10, 10), 200.0, dtype=np.float32)
+        grid2 = Grid(data2, xmin=15, ymin=0, cellsize=1)
+
+        # With feather_distance=1 (1 cell), cells at distance>1 from any null
+        # should get full weight (be closer to their own grid value)
+        merged_fd1 = GridMerger.merge_two_grids(
+            grid1, grid2, priority='blend', feather=True, feather_distance=1
+        )
+        merged_fd5 = GridMerger.merge_two_grids(
+            grid1, grid2, priority='blend', feather=True, feather_distance=5
+        )
+
+        # Both should produce valid output (no NaN, no extra nulls)
+        assert not np.any(np.isnan(merged_fd1.data))
+        assert not np.any(np.isnan(merged_fd5.data))
+        assert (merged_fd1.data[:, 20:] != -99999.0).all()
+        assert (merged_fd5.data[:, 20:] != -99999.0).all()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
